@@ -1,0 +1,59 @@
+name: Build unsigned Siri provider probe
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: siri-probe-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    # Public standard runners only. Never spend private-repository minutes here.
+    if: ${{ github.event.repository.private == false }}
+    runs-on: xcode-27
+    timeout-minutes: 15
+    env:
+      # Verified in the official xcode-27 image manifest. The actual SDK is logged.
+      DEVELOPER_DIR: /Applications/Xcode_27.1.app/Contents/Developer
+    steps:
+      - name: Check out the probe source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Check the toolchain and project files
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -d "$DEVELOPER_DIR"
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+          plutil -lint Info.plist
+          plutil -lint SiriProviderProbe.xcodeproj/project.pbxproj
+          bash -n build-unsigned.sh
+
+      - name: Build and package without signing
+        shell: bash
+        run: bash ./build-unsigned.sh
+
+      - name: Record the compiled package layout
+        shell: bash
+        run: |
+          set -euo pipefail
+          app="$PWD/build/DerivedData/Build/Products/Release-iphoneos/SiriProviderProbe.app"
+          plutil -p "$app/Info.plist" > dist/compiled-info.txt
+          file "$app/SiriProviderProbe" > dist/compiled-binary.txt
+          find "$app" -type f | sed "s|$app/||" > dist/compiled-files.txt
+
+      - name: Save the IPA and build evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: siri-provider-probe-unsigned-${{ github.run_id }}
+          path: dist/
+          retention-days: 1
+          if-no-files-found: ignore
